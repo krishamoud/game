@@ -1,0 +1,29 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+
+    <script type="text/javascript">
+         function myWebsocketStart()
+         {
+               var ws = new WebSocket("ws://localhost:9090/api/v1/connect");
+
+               ws.onmessage = function (evt)
+               {
+                  var myTextArea = document.getElementById("textarea1");
+                  myTextArea.innerHTML = myTextArea.innerHTML + "\n" + evt.data
+               };
+
+               ws.onclose = function()
+               {
+                  var myTextArea = document.getElementById("textarea1");
+                  myTextArea.innerHTML = myTextArea.innerHTML + "\n" + "Connection closed";
+               };
+
+         }
+
+    </script>
+</head>
+<body onload="myWebsocketStart();">
+<pre id="textarea1"></pre>
+</body>
+</html>
