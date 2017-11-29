@@ -2,8 +2,8 @@
 package games
 
 import (
+	"container/list"
 	"encoding/json"
-	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -17,27 +17,32 @@ import (
 
 // Game holds the state for the entire game
 type Game struct {
-	Users    []*Player
-	FoodArr  []*Food
-	Sockets  map[string]*Connection
-	Quadtree *quadtree.Quadtree
-	mu       *sync.Mutex
+	Users         *list.List
+	Food          *list.List
+	Ballistics    *list.List
+	ClientManager *ClientManager
+	Sockets       map[string]*Client
+	Quadtree      *quadtree.Quadtree
+	mu            *sync.Mutex
 }
 
 // PushFood adds food to a one of the food arrays
 func (g *Game) PushFood(f *Food) {
-	g.FoodArr = append(g.FoodArr, f)
+	g.Food.PushFront(f)
 }
 
 // PopFood removes one food
 func (g *Game) PopFood() {
-	g.FoodArr = g.FoodArr[1:]
+	g.Food.Remove(g.Food.Front())
 }
 
 // SpliceFood removes food at an index
-func (g *Game) SpliceFood(i int) {
-	if i < len(g.FoodArr) {
-		g.FoodArr = append(g.FoodArr[:i], g.FoodArr[i+1:]...)
+func (g *Game) SpliceFood(id string) {
+	for e := g.Food.Front(); e != nil; e = e.Next() {
+		// do something with e.Value
+		if e.Value.(*Food).ID == id {
+			g.Food.Remove(e)
+		}
 	}
 }
 
@@ -48,95 +53,62 @@ func (g *Game) AddPlayerConnection(p *Player) {
 
 // RemovePlayerConnection removes the players socke to the game
 func (g *Game) RemovePlayerConnection(p *Player) {
-	g.Sockets[p.ID].Conn.Close()
-	delete(g.Sockets, p.ID)
+	// g.Sockets[p.ID].Conn.Close()
+	// delete(g.Sockets, p.ID)
 }
 
 // MoveLoop ticks every player
 func (g *Game) MoveLoop() {
-	for _, p := range g.Users {
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		p := e.Value.(*Player)
 		g.tickPlayer(p)
 	}
-}
-
-// GameLoop balances the mass
-func (g *Game) GameLoop() {
-	g.balanceMass()
+	for e := g.Ballistics.Front(); e != nil; e = e.Next() {
+		b := e.Value.(*Ballistic)
+		b.Update(g)
+	}
+	for e := g.Food.Front(); e != nil; e = e.Next() {
+		f := e.Value.(*Food)
+		f.Update(g)
+	}
+	g.RefreshQTree()
 }
 
 // SendUpdates updates all clients to the current game state
 func (g *Game) SendUpdates() {
-	for _, p := range g.Users {
-		if p.Point.X == 0 {
-			p.Point.X = c.GameWidth / 2
-		}
-		if p.Point.Y == 0 {
-			p.Point.Y = c.GameHeight / 2
-		}
-		visibleFood := p.VisibleFood()
-		visiblePlayers := p.VisibleCells()
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		p := e.Value.(*Player)
+		visibleFood := p.VisibleFood(g)
+		visiblePlayers := p.VisibleCells(g)
+		visibleBallistics := p.VisibleBallistics(g)
 		var m = struct {
-			Players     []*Player `json:"players"`
-			VisibleFood []*Food   `json:"visibleFood"`
+			Players           []*Player    `json:"players"`
+			VisibleFood       []*Food      `json:"visibleFood"`
+			VisibleBallistics []*Ballistic `json:"visibleBallistics"`
 		}{
 			visiblePlayers,
 			visibleFood,
+			visibleBallistics,
 		}
 		data, _ := json.MarshalIndent(&m, "", "\t")
 		p.Emit("serverTellPlayerMove", data)
-		// visibleM
 	}
-}
-
-// MoveInterval moves the game alone
-func (g *Game) MoveInterval() {
-	ticker := time.NewTicker(1000 / 60 * time.Millisecond)
-	quit := make(chan struct{})
-	func() {
-		for {
-			select {
-			case <-ticker.C:
-				// do stuff
-				g.MoveLoop()
-			case <-quit:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
 }
 
 // GameInterval runs GameLoop at 60hz
 func (g *Game) GameInterval() {
-	ticker := time.NewTicker(1000 * time.Millisecond)
-	quit := make(chan struct{})
-	func() {
-		for {
-			select {
-			case <-ticker.C:
-				// do stuff
-				g.GameLoop()
-			case <-quit:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
-}
-
-// UpdateInterval runs SendUpdates in an interval dependent on network latency
-func (g *Game) UpdateInterval() {
 	n := time.Duration(c.NetworkUpdateFactor)
-	ticker := time.NewTicker(1000 / n * time.Millisecond)
+	updateTicker := time.NewTicker(1000 / n * time.Millisecond)
 	quit := make(chan struct{})
 	func() {
 		for {
 			select {
-			case <-ticker.C:
-				// do stuff
+			case <-updateTicker.C:
+				g.MoveLoop()
 				g.SendUpdates()
+				g.balanceMass()
 			case <-quit:
-				ticker.Stop()
+				updateTicker.Stop()
 				return
 			}
 		}
@@ -144,108 +116,114 @@ func (g *Game) UpdateInterval() {
 }
 
 func (g *Game) tickPlayer(p *Player) {
-	// hbDuration := time.Duration(c.MaxHeartBeatInterval) * time.Millisecond
-	if false {
-		// if p.LastHeartbeat.Before(time.Now().Add(-hbDuration)) {
-		fmt.Println("Kicking for inactivity")
-		str := "Last heartbeat recieved over " + string(c.MaxHeartBeatInterval) + " ms ago"
-		var m = struct {
-			Msg string `jsong:"msg"`
-		}{
-			str,
-		}
-		body, _ := json.MarshalIndent(&m, "", "\t")
-		p.Emit("kick", body)
-		g.RemovePlayerConnection(p)
-		if i := g.FindDuplicatePlayer(p.ID); i > -1 {
-			g.SpliceUser(i)
-		}
-	}
+	col := p.GetCollisions(g)
+	pColl := p.GetPlayerCollisions(col)
+	p.checkHeartbeat(g)
 	p.SetCollider()
-	p.movePlayer()
-	p.SetSpeed()
-	g.RefreshQTree()
-	b := quadtree.Bounds{
-		X:      p.Point.X,
-		Y:      p.Point.Y,
-		Width:  utils.MassToRadius(p.MassTotal),
-		Height: utils.MassToRadius(p.MassTotal),
-	}
-	collidablePoints := g.Quadtree.Retrieve(b)
-	for _, col := range collidablePoints {
-		switch col.P {
-		case "food":
-			if len(p.Cells) != 0 && col.Idx < len(g.FoodArr) {
-				fc := g.FoodArr[col.Idx].Col
-				if p.Shape == circle {
-					if p.CheckCircleCollision(fc) {
-						p.Cells[0].Mass += c.FoodMass
-						p.MassTotal += c.FoodMass
-						p.Cells[0].Radius = utils.MassToRadius(p.Cells[0].Mass)
-						g.SpliceFood(col.Idx)
-					}
-				} else {
-					if p.CheckBoxCollision(fc) {
-						p.Cells[0].Mass += c.FoodMass
-						p.MassTotal += c.FoodMass
-						p.Cells[0].Radius = utils.MassToRadius(p.Cells[0].Mass)
-						g.SpliceFood(col.Idx)
-					}
-				}
-			}
-		}
-	}
+	p.movePlayer(pColl)
+	p.reload()
+	p.CheckCollisions(col, g)
+	p.CheckKillPlayer(g)
 }
 
 // RefreshQTree clears and reinserts the quadtree nodes
 func (g *Game) RefreshQTree() {
 	g.Quadtree.Clear()
-	for _, u := range g.Users {
-		b := quadtree.Bounds{
-			X:      u.Point.X,
-			Y:      u.Point.Y,
-			Width:  utils.MassToRadius(u.MassTotal),
-			Height: utils.MassToRadius(u.MassTotal),
-			P:      "user",
+	b := quadtree.Bounds{}
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		u := e.Value.(*Player)
+		var w, h float64
+		if u.Shape == circle {
+			w = utils.MassToRadius(u.MassTotal)
+			h = utils.MassToRadius(u.MassTotal)
+			b.X = u.Point.X
+			b.Y = u.Point.Y
+		} else {
+			w = u.W
+			h = u.H
+			b.X = u.Point.X
+			b.Y = u.Point.Y
 		}
+		b.Width = w
+		b.Height = h
+		b.ID = u.ID
+		b.Mass = u.MassTotal
+		b.P = "user"
+		b.Obj = u
 		g.Quadtree.Insert(b)
 	}
-	for i, f := range g.FoodArr {
+	for e := g.Food.Front(); e != nil; e = e.Next() {
+		f := e.Value.(*Food)
 		b := quadtree.Bounds{
 			X:      f.Col.Pos.X,
 			Y:      f.Col.Pos.Y,
 			Width:  f.Radius,
 			Height: f.Radius,
 			P:      "food",
-			Idx:    i,
+			ID:     f.ID,
+			Obj:    f,
 		}
 		g.Quadtree.Insert(b)
 	}
+	for e := g.Ballistics.Front(); e != nil; e = e.Next() {
+		b := e.Value.(*Ballistic)
+		bnd := quadtree.Bounds{
+			X:      b.Point.X,
+			Y:      b.Point.Y,
+			Width:  b.Radius,
+			Height: b.Radius,
+			P:      "ballistic",
+			ID:     b.ID,
+			Obj:    b,
+		}
+		g.Quadtree.Insert(bnd)
+	}
 }
 
-// FindDuplicatePlayer finds the playerID and returns its index, -1 if not found
-func (g *Game) FindDuplicatePlayer(playerID string) int {
-	for i, p := range g.Users {
-		if p.ID == playerID {
-			return i
+// PushUser adds a User to the Game.Users list
+func (g *Game) PushUser(u *Player) {
+	g.Users.PushFront(u)
+}
+
+// SpliceUser removes a User from the Game.Users list
+func (g *Game) SpliceUser(id string) {
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		p := e.Value.(*Player)
+		if p.ID == id {
+			g.Users.Remove(e)
+			return
 		}
 	}
-	return -1
 }
 
-// PushUser adds a User to the Game.Users slice
-func (g *Game) PushUser(u *Player) {
-	g.Users = append(g.Users, u)
+// RemoveBallistic removes a ballistic from the game
+func (g *Game) RemoveBallistic(id string) {
+	for e := g.Ballistics.Front(); e != nil; e = e.Next() {
+		b := e.Value.(*Ballistic)
+		if b.ID == id {
+			g.Ballistics.Remove(e)
+			b = nil
+			return
+		}
+	}
 }
 
-// SpliceUser removes a User from the Game.Users slice
-func (g *Game) SpliceUser(i int) {
-	g.Users = append(g.Users[:i], g.Users[i+1:]...)
+// GetBallistic returns a ballistic index
+func (g *Game) GetBallistic(id string) *Ballistic {
+	var b *Ballistic
+	for e := g.Ballistics.Front(); e != nil; e = e.Next() {
+		temp := e.Value.(*Ballistic)
+		if temp.ID == id {
+			return temp
+		}
+	}
+	return b
 }
 
 // Emit sends websocket messages to every player in the game
 func (g *Game) Emit(msg string, body json.RawMessage) {
-	for _, p := range g.Users {
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		p := e.Value.(*Player)
 		p.mu.Lock()
 		cn := p.Conn.Conn
 		message := &Message{
@@ -259,7 +237,8 @@ func (g *Game) Emit(msg string, body json.RawMessage) {
 
 // Broadcast sends websocket messages to every player except the playerID that called it
 func (g *Game) Broadcast(pID string, msg string, body json.RawMessage) {
-	for _, p := range g.Users {
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		p := e.Value.(*Player)
 		if pID != p.ID {
 			p.mu.Lock()
 			cn := p.Conn.Conn
@@ -268,7 +247,7 @@ func (g *Game) Broadcast(pID string, msg string, body json.RawMessage) {
 				Data: body,
 			}
 			cn.WriteJSON(message)
-			p.mu.Lock()
+			p.mu.Unlock()
 		}
 	}
 }
@@ -277,27 +256,29 @@ func (g *Game) addFood(toAdd int) {
 	for toAdd > 0 {
 		position := utils.RandomPosition(radius)
 		pos := collision2d.NewVector(position.X, position.Y)
-		g.PushFood(&Food{
-			ID:     db.RandomID(12),
+		id := db.RandomID(12)
+		f := &Food{
+			ID:     id,
 			Point:  position,
 			Radius: radius,
-			Mass:   rand.Float64() + 2,
+			Mass:   c.FoodMass,
 			Hue:    rand.Intn(360),
 			Col:    collision2d.NewCircle(pos, radius),
-		})
+		}
+		g.PushFood(f)
 		toAdd--
 	}
 }
 func (g *Game) balanceMass() {
-	totalMass := float64(len(MainGame.FoodArr))*c.FoodMass + userMass()
+	totalMass := float64(g.Food.Len())*c.FoodMass + g.userMass()
 	massDiff := c.GameMass - totalMass
-	maxFoodDiff := c.MaxFood - float64(len(MainGame.FoodArr))
+	maxFoodDiff := c.MaxFood - float64(g.Food.Len())
 	foodDiff := massDiff/c.FoodMass - maxFoodDiff
 	foodToAdd := math.Min(float64(foodDiff), float64(maxFoodDiff))
 	foodToRemove := -math.Max(float64(foodDiff), float64(maxFoodDiff))
 	if foodToAdd > 0 {
 		g.addFood(int(foodToAdd))
 	} else if foodToRemove > 0 {
-		removeFood(int(foodToRemove))
+		g.removeFood(int(foodToRemove))
 	}
 }

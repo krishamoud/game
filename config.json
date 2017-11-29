@@ -5,7 +5,7 @@
   "foodMass": 1,
   "fireFood": 20,
   "limitSplit": 16,
-  "defaultPlayerMass": 10,
+  "defaultPlayerMass": 50,
   "virus": {
     "fill": "#33ff33",
     "stroke": "#19D119",
@@ -24,7 +24,7 @@
   "maxVirus": 50,
   "slowBase": 4.5,
   "logChat": 0,
-  "networkUpdateFactor": 40,
+  "networkUpdateFactor": 60,
   "maxHeartbeatInterval": 5000,
   "foodUniformDisposition": true,
   "virusUniformDisposition": false,

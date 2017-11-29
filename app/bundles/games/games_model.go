@@ -2,9 +2,9 @@
 package games
 
 import (
+	"container/list"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -24,10 +24,17 @@ const (
 
 // MainGame is the single exported game the server runs until I create a GameManager
 var MainGame = &Game{
-	Users:   []*Player{},
-	FoodArr: []*Food{},
-	Sockets: make(map[string]*Connection),
-	mu:      new(sync.Mutex),
+	Users:      list.New(),
+	Food:       list.New(),
+	Ballistics: list.New(),
+	mu:         new(sync.Mutex),
+	ClientManager: &ClientManager{
+		clients:      make(map[*Client]bool),
+		broadcast:    make(chan *Message),
+		addClient:    make(chan *Client),
+		removeClient: make(chan *Client),
+	},
+	Sockets: make(map[string]*Client),
 	Quadtree: &quadtree.Quadtree{
 		Bounds: quadtree.Bounds{
 			X:      0,
@@ -35,7 +42,7 @@ var MainGame = &Game{
 			Width:  c.GameWidth,
 			Height: c.GameHeight,
 		},
-		MaxObjects: 10,
+		MaxObjects: 200,
 		MaxLevels:  7,
 		Level:      0,
 		Objects:    make([]quadtree.Bounds, 0),
@@ -52,14 +59,14 @@ type Message struct {
 var c = conf.AppConf
 var initMassLog = utils.Log(float64(c.DefaultPlayerMass), float64(c.SlowBase))
 
-func setupConnection(cn *Connection) {
+func setupConnection(cn *Client) {
 	radius := utils.MassToRadius(c.DefaultPlayerMass)
 	position := utils.RandomPosition(radius)
 	cells := []*Cell{}
 	var shape string
 	var massTotal float64
 	if cn.Type == player {
-		if len(MainGame.Users)&1 == 1 {
+		if MainGame.Users.Len()&1 == 1 {
 			shape = circle
 		} else {
 			shape = square
@@ -89,6 +96,7 @@ func setupConnection(cn *Connection) {
 		Conn:          cn,
 		mu:            new(sync.Mutex),
 		Shape:         shape,
+		msgChan:       make(chan string),
 	}
 
 	for {
@@ -97,11 +105,11 @@ func setupConnection(cn *Connection) {
 		if err != nil {
 			return
 		}
-		dispatch(m, currentPlayer)
+		MainGame.dispatch(m, currentPlayer)
 	}
 }
 
-func dispatch(msg *Message, p *Player) {
+func (g *Game) dispatch(msg *Message, p *Player) {
 	switch msg.Type {
 	case "gotit":
 		data := make(map[string]interface{})
@@ -109,7 +117,7 @@ func dispatch(msg *Message, p *Player) {
 		p.Name = data["name"].(string)
 		p.ScreenHeight = data["screenHeight"].(float64)
 		p.ScreenWidth = data["screenWidth"].(float64)
-		gotIt(p, data)
+		g.gotIt(p)
 		break
 	case "pingcheck":
 		p.Emit("pongcheck", rawEmptyObj)
@@ -125,19 +133,15 @@ func dispatch(msg *Message, p *Player) {
 		p.WindowResize(w, h)
 		break
 	case "respawn":
-		if i := MainGame.FindDuplicatePlayer(p.ID); i != -1 {
-			MainGame.SpliceUser(i)
-		}
+		g.SpliceUser(p.ID)
 		p.Emit("welcome", rawEmptyObj)
 		fmt.Println("[INFO] User " + p.Name + " respawned!")
 		break
 	case "disconnect":
-		if i := MainGame.FindDuplicatePlayer(p.ID); i > -1 {
-			MainGame.SpliceUser(i)
-			MainGame.RemovePlayerConnection(p)
-		}
+		g.SpliceUser(p.ID)
+		g.RemovePlayerConnection(p)
 		fmt.Println("[INFO] User " + p.Name + " disconnected!")
-		MainGame.Broadcast(p.ID, "playerDisconnect", rawEmptyObj)
+		g.Broadcast(p.ID, "playerDisconnect", rawEmptyObj)
 		break
 	case "0":
 		p.LastHeartbeat = time.Now()
@@ -152,22 +156,19 @@ func dispatch(msg *Message, p *Player) {
 				Y: point["y"].(float64),
 			}
 		}
-	case "1":
-
+		break
+	case "2":
+		p.Fire(g)
 	}
 }
 
-func gotIt(p *Player, msg map[string]interface{}) {
-	fmt.Println(msg)
-	if MainGame.FindDuplicatePlayer(p.ID) != -1 {
-		fmt.Println("[INFO] Player ID is already connected, kicking")
-		MainGame.RemovePlayerConnection(p)
-	} else if !utils.ValidNickname(p.Name) {
+func (g *Game) gotIt(p *Player) {
+	if !utils.ValidNickname(p.Name) {
 		p.Conn.Conn.WriteMessage(websocket.TextMessage, []byte("kick"))
-		MainGame.RemovePlayerConnection(p)
+		g.RemovePlayerConnection(p)
 	} else {
 		fmt.Println("[INFO] Player " + p.Name + " connected!")
-		MainGame.AddPlayerConnection(p)
+		g.AddPlayerConnection(p)
 
 		radius := utils.MassToRadius(c.DefaultPlayerMass)
 		position := utils.RandomPosition(radius)
@@ -189,14 +190,18 @@ func gotIt(p *Player, msg map[string]interface{}) {
 		}
 		p.Hue = rand.Intn(360)
 		p.LastHeartbeat = time.Now()
-		MainGame.PushUser(p)
+		p.Scale = 1
+		p.ClipSize = 10
+		p.ShotsLeft = p.ClipSize
+		p.MassCurrent = p.MassTotal
+		g.PushUser(p)
 		var n = struct {
 			Name string `json:"name"`
 		}{
 			p.Name,
 		}
 		b, _ := json.MarshalIndent(&n, "", "\t")
-		MainGame.Emit("playerJoin", b)
+		g.Emit("playerJoin", b)
 		var gd = struct {
 			GameWidth  float64 `json:"gameWidth"`
 			GameHeight float64 `json:"gameHeight"`
@@ -206,47 +211,21 @@ func gotIt(p *Player, msg map[string]interface{}) {
 		}
 		data, _ := json.MarshalIndent(&gd, "", "\t")
 		p.Emit("gameSetup", data)
-		fmt.Println("Total Players:", len(MainGame.Users))
+		fmt.Println("Total Players:", g.Users.Len())
 	}
 }
 
-func removeFood(toRem int) {
+func (g *Game) removeFood(toRem int) {
 	for toRem > 0 {
-		MainGame.PopFood()
+		g.PopFood()
 		toRem--
 	}
 }
 
-func moveMass(mass *Mass) {
-	deg := math.Atan2(float64(mass.Target.Y), float64(mass.Target.X))
-	deltaY := mass.Speed * math.Sin(deg)
-	deltaX := mass.Speed * math.Cos(deg)
-	mass.Speed -= 0.5
-	if mass.Speed < 0 {
-		mass.Speed = 0
-	}
-	mass.Point.Y += deltaY
-	mass.Point.X += deltaX
-
-	borderCalc := mass.Radius + 5
-	if mass.Point.X > c.GameWidth-borderCalc {
-		mass.Point.X = c.GameWidth - borderCalc
-	}
-	if mass.Point.Y > c.GameHeight-borderCalc {
-		mass.Point.Y = c.GameHeight - borderCalc
-	}
-
-	if mass.Point.X < borderCalc {
-		mass.Point.X = borderCalc
-	}
-	if mass.Point.Y < borderCalc {
-		mass.Point.Y = borderCalc
-	}
-}
-
-func userMass() float64 {
+func (g *Game) userMass() float64 {
 	var total float64
-	for _, u := range MainGame.Users {
+	for e := g.Users.Front(); e != nil; e = e.Next() {
+		u := e.Value.(*Player)
 		total += u.MassTotal
 	}
 	return total

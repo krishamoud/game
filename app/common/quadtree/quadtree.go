@@ -19,6 +19,9 @@ type Bounds struct {
 	Height float64
 	P      string
 	Idx    int
+	Mass   float64
+	ID     string
+	Obj    interface{}
 }
 
 // Split the node into 4 subnodes

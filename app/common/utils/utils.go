@@ -2,8 +2,10 @@
 package utils
 
 import (
+	crypto "crypto/rand"
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"strconv"
 	"time"
@@ -51,17 +53,33 @@ func GetHypotenuse(x, y float64) float64 {
 	return math.Sqrt(math.Pow(float64(y), 2) + math.Pow(float64(x), 2))
 }
 
+// DegreesToRadians returns radians from DegreesToRadians
+func DegreesToRadians(degrees float64) float64 {
+	return degrees * math.Pi / 180
+}
+
+// GetRadianAngle returns the angle between two points
+func GetRadianAngle(p1, p2 *Point) float64 {
+	return math.Atan2(p2.Y-p1.Y, p2.X-p1.X)
+}
+
 // RandomInRange generates a random position in a RandomInRange
 func RandomInRange(from, to float64) float64 {
-	rand.Seed(int64(time.Now().Nanosecond()))
-	return rand.Float64()*(to-from) + from
+	dif := big.NewFloat(to - from)
+	difInt, _ := dif.Int(nil)
+	p, _ := crypto.Int(crypto.Reader, difInt)
+	f := new(big.Float).SetInt(p)
+	f2, _ := f.Float64()
+	return f2
 }
 
 // RandomPosition generates a random position within the field of play
 func RandomPosition(radius float64) *Point {
+	x := RandomInRange(0, cfg.GameWidth)
+	y := RandomInRange(0, cfg.GameHeight)
 	return &Point{
-		X: RandomInRange(radius, cfg.GameWidth-radius),
-		Y: RandomInRange(radius, cfg.GameHeight-radius),
+		X: x,
+		Y: y,
 	}
 }
 

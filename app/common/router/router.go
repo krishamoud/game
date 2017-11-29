@@ -10,7 +10,6 @@ import (
 
 	// Resources
 	"github.com/krishamoud/game/app/bundles/games"
-	"github.com/krishamoud/game/app/bundles/users"
 
 	// common middleware
 	"github.com/krishamoud/game/app/common/middleware"
@@ -25,29 +24,29 @@ func Router() *mux.Router {
 	s := r.PathPrefix("/api/v1/").Subrouter()
 
 	// Controllers declaration
-	uc := &users.Controller{}
+	// uc := &users.Controller{}
 	gc := &games.Controller{}
 
 	// middleware chaining
 	commonHandlers := alice.New(middleware.LoggingHandler, middleware.RecoverHandler, middleware.AccessOriginHandler)
-	securedHandlers := commonHandlers.Append(middleware.Authenticate)
+	// securedHandlers := commonHandlers.Append(middleware.Authenticate)
 
 	// User creation Routes
 	// s.Handle("/users/new", commonHandlers.ThenFunc(uc.New)).Methods("GET")
-	s.Handle("/users", commonHandlers.ThenFunc(uc.Create)).Methods("POST")
-	s.Handle("/users", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
-
-	// User Information Routes
-	s.Handle("/users", securedHandlers.ThenFunc(uc.Index)).Methods("GET")
-	s.Handle("/users/{userId}", securedHandlers.ThenFunc(uc.Show)).Methods("GET")
-	s.Handle("/users/{userId}", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
+	// s.Handle("/users", commonHandlers.ThenFunc(uc.Create)).Methods("POST")
+	// s.Handle("/users", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
+	//
+	// // User Information Routes
+	// s.Handle("/users", securedHandlers.ThenFunc(uc.Index)).Methods("GET")
+	// s.Handle("/users/{userId}", securedHandlers.ThenFunc(uc.Show)).Methods("GET")
+	// s.Handle("/users/{userId}", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
 
 	// Game connection route
 	s.HandleFunc("/connect", gc.Connect).Methods("GET")
 
 	// Auth Routes
-	s.Handle("/auth", commonHandlers.ThenFunc(uc.Auth)).Methods("POST")
-	s.Handle("/auth", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
+	// s.Handle("/auth", commonHandlers.ThenFunc(uc.Auth)).Methods("POST")
+	// s.Handle("/auth", commonHandlers.ThenFunc(uc.New)).Methods("OPTIONS")
 
 	// Naked route: only being used for testing purposes at the moment
 	// change home.html to get logs for a certain container

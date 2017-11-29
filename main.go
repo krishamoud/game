@@ -7,7 +7,6 @@ import (
 
 	// Common code
 	_ "github.com/krishamoud/game/app/common/conf"
-	// "github.com/krishamoud/game/app/common/db"
 
 	"net/http"
 
@@ -18,10 +17,9 @@ func main() {
 	// close the db connection when we're done
 	// defer db.MongoConn.Close()
 
-	// Start loops
-	go games.MainGame.MoveInterval()
+	// Start loop
 	go games.MainGame.GameInterval()
-	go games.MainGame.UpdateInterval()
+	go games.MainGame.ClientManager.Start(games.MainGame)
 
 	// Handle all requests with gorilla/mux
 	http.Handle("/", router.Router())

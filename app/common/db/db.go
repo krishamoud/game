@@ -10,10 +10,10 @@ import (
 )
 
 // MongoConn is the connection to the MongoDB that we keep open
-var MongoConn = getConn()
+// var MongoConn = getConn()
 
 // DB is the database that we connect to
-var DB = getDB(MongoConn)
+// var DB = getDB(MongoConn)
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 const (

@@ -13,12 +13,6 @@ type Controller struct {
 	common.Controller
 }
 
-// Connection maintains the socket and type
-type Connection struct {
-	Conn *websocket.Conn
-	Type string
-}
-
 // Websocket upgrade to push logs
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -36,9 +30,14 @@ func (c *Controller) Connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not open websocket connection", http.StatusBadRequest)
 		return
 	}
-	cn := &Connection{
+
+	cn := &Client{
 		Conn: conn,
+		send: make(chan *Message),
 		Type: r.FormValue("type"),
 	}
+	// MainGame.ClientManager.addClient <- cn
+	// go cn.WriteJSON()
+	// go cn.read()
 	setupConnection(cn)
 }
