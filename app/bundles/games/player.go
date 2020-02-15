@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/Tarliton/collision2d"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 	"github.com/krishamoud/game/app/common/db"
 	"github.com/krishamoud/game/app/common/quadtree"
 	"github.com/krishamoud/game/app/common/utils"
@@ -46,6 +49,7 @@ type Player struct {
 	EyeLength     float64            `json:"eyeLength"`
 	ClipSize      int                `json:"clipSize"`
 	ShotsLeft     int                `json:"shotsLeft"`
+	ws            net.Conn
 	msgChan       chan string
 	lastShot      time.Time
 	mu            *sync.Mutex
@@ -266,14 +270,12 @@ func (p *Player) CheckBoxCollision(circle collision2d.Circle) bool {
 
 // Emit sends a websocket message to this player
 func (p *Player) Emit(msg string, body json.RawMessage) {
-	p.mu.Lock()
-	cn := p.Conn.Conn
 	message := &Message{
 		Type: msg,
 		Data: body,
 	}
-	cn.WriteJSON(message)
-	p.mu.Unlock()
+	json, _ := json.Marshal(message)
+	err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 }
 
 // SetCollider sets the collider every frame to fit the expanding size
@@ -341,9 +343,10 @@ func (p *Player) AddMass(m float64) {
 
 // RemoveMass adds mass and increases size accordingly
 func (p *Player) RemoveMass(m float64) {
+	p.MassCurrent -= m
 	p.Cells[0].Mass -= m
 	p.MassTotal -= m
-	p.Cells[0].Radius = utils.MassToRadius(p.Cells[0].Mass)
+	p.Cells[0].Radius = utils.MassToRadius(p.MassTotal)
 }
 
 // FoodCollision Checks the collisions between food and players
@@ -386,25 +389,37 @@ func (p *Player) CheckCollisions(collidablePoints []quadtree.Bounds, g *Game) {
 
 // BallisticCollision checks if a player collides with a ballistic
 func (p *Player) BallisticCollision(b *Ballistic, g *Game) {
-	bloodTotal := 0.1 * p.MassTotal
-	bloodLeak := (b.Mass / p.MassTotal) * bloodTotal
+	// bloodTotal := 0.1 * p.MassTotal
+	// bloodLeak := (b.Mass / p.MassTotal) * bloodTotal
 	dmg := b.Mass
 	if dmg > p.MassTotal {
 		dmg *= 0.1
 	}
-	if p.IsCircle() {
-		if ok, col := collision2d.TestCircleCircle(p.Circle, b.circle); ok {
-			p.Leak(col.OverlapV, bloodLeak, b.Degree, g)
-			p.MassCurrent -= dmg
-			g.RemoveBallistic(b.ID)
+	if p.IsCircle() && b.IsCircle() {
+		if ok, _ := collision2d.TestCircleCircle(p.Circle, b.Circle); ok {
+			p.TakeDamage(g, dmg, b.ID)
+		}
+	} else if p.IsCircle() && !b.IsCircle() {
+		if ok, _ := collision2d.TestCirclePolygon(p.Circle, b.Box.ToPolygon()); ok {
+			p.TakeDamage(g, dmg, b.ID)
+		}
+	} else if !p.IsCircle() && b.IsCircle() {
+		if ok, _ := collision2d.TestCirclePolygon(b.Circle, p.Box.ToPolygon()); ok {
+			p.TakeDamage(g, dmg, b.ID)
 		}
 	} else {
-		if ok, col := collision2d.TestPolygonCircle(p.Box.ToPolygon(), b.circle); ok {
-			p.Leak(col.OverlapV, bloodLeak, b.Degree, g)
-			p.MassCurrent -= dmg
-			g.RemoveBallistic(b.ID)
+		if ok, _ := collision2d.TestPolygonPolygon(b.Box.ToPolygon(), p.Box.ToPolygon()); ok {
+			p.TakeDamage(g, dmg, b.ID)
 		}
 	}
+}
+
+// TakeDamage decreases player health
+func (p *Player) TakeDamage(g *Game, dmg float64, id string) {
+	// p.Leak(col.OverlapV, bloodLeak, b.Degree, g)
+	p.MassTotal -= dmg
+	p.RemoveMass(dmg)
+	g.RemoveBallistic(id)
 }
 
 // Leak spills blood on the map
@@ -439,8 +454,8 @@ func (p *Player) Leak(col collision2d.Vector, bloodMass float64, angle float64, 
 
 // CheckKillPlayer checks to see if we should kill the player
 func (p *Player) CheckKillPlayer(g *Game) {
-	if p.MassCurrent < 0 {
-		p.Explode(g)
+	if p.MassTotal < 0 {
+		// p.Explode(g)
 		p.KillMessage()
 		g.RemovePlayerConnection(p)
 		g.SpliceUser(p.ID)
@@ -563,8 +578,8 @@ func (p *Player) CheckAmmo() bool {
 func (p *Player) reload() {
 	now := time.Now()
 	t := p.lastShot.Add(time.Second)
-	if now.After(t) && p.CheckAmmo() {
-		p.ShotsLeft++
+	if now.After(t) {
+		p.ShotsLeft = 1
 		p.lastShot = now
 	}
 }
@@ -661,41 +676,51 @@ func (p *Player) Fire(g *Game) {
 		Y: tp.Y + p.Target.Y,
 	}
 	deg := math.Atan2(target.Y-tp.Y, target.X-tp.X)
-	d2 := deg + utils.DegreesToRadians(15)
-	d3 := deg - utils.DegreesToRadians(15)
+	// d2 := deg + utils.DegreesToRadians(15)
+	// d3 := deg - utils.DegreesToRadians(15)
 	p1 := &utils.Point{
 		X: tp.X + math.Cos(deg)*(p.W/2),
 		Y: tp.Y + math.Sin(deg)*(p.H/2),
 	}
-	p2 := &utils.Point{
-		X: tp.X + math.Cos(d2)*(p.W/2),
-		Y: tp.Y + math.Sin(d2)*(p.H/2),
-	}
-	p3 := &utils.Point{
-		X: tp.X + math.Cos(d3)*(p.W/2),
-		Y: tp.Y + math.Sin(d3)*(p.H/2),
-	}
-	var baseSpeed float64 = 15
-	var b1, b2, b3 *Ballistic
+	// p2 := &utils.Point{
+	// 	X: tp.X + math.Cos(d2)*(p.W/2),
+	// 	Y: tp.Y + math.Sin(d2)*(p.H/2),
+	// }
+	// p3 := &utils.Point{
+	// 	X: tp.X + math.Cos(d3)*(p.W/2),
+	// 	Y: tp.Y + math.Sin(d3)*(p.H/2),
+	// }
+	// var baseSpeed float64 = 15
+	var baseSpeed = p.Cells[0].Speed * 1.75
+	// var b1, b2, b3 *Ballistic
+	var b1 *Ballistic
 	w := p.W
 	dist := 8 * w
 	pID := p.ID
 	mass := p.MassTotal * 0.1
 	if p.ShotsLeft > 0 {
 		p.lastShot = time.Now()
-		if p.Shape == circle {
-			mass = mass / 3
-			b1 = NewBallistic(pID, baseSpeed, mass, p1, deg, dist)
-			b2 = NewBallistic(pID, baseSpeed, mass, p2, d2, dist)
-			b3 = NewBallistic(pID, baseSpeed, mass, p3, d3, dist)
-			g.Ballistics.PushFront(b1)
-			g.Ballistics.PushFront(b2)
-			g.Ballistics.PushFront(b3)
+		// 	if p.Shape == circle {
+		// 		mass = mass / 3
+		// 		b1 = NewBallistic(pID, baseSpeed, mass, p1, deg, dist)
+		// 		b2 = NewBallistic(pID, baseSpeed, mass, p2, d2, dist)
+		// 		b3 = NewBallistic(pID, baseSpeed, mass, p3, d3, dist)
+		// 		g.Ballistics.PushFront(b1)
+		// 		g.Ballistics.PushFront(b2)
+		// 		g.Ballistics.PushFront(b3)
+		// 	} else {
+		if p.MassTotal-mass > c.DefaultPlayerMass {
+			p.RemoveMass(mass)
 		} else {
-			b1 = NewBallistic(pID, baseSpeed, mass, p1, deg, dist)
-			g.Ballistics.PushFront(b1)
+			p.MassCurrent = c.DefaultPlayerMass
+			p.Cells[0].Mass = c.DefaultPlayerMass
+			p.MassTotal = c.DefaultPlayerMass
+			p.Cells[0].Radius = utils.MassToRadius(c.DefaultPlayerMass)
 		}
-		p.ShotsLeft--
+		b1 = NewBallistic(pID, baseSpeed, mass, p1, deg, dist, p.Shape, p.Hue)
+		g.Ballistics.PushFront(b1)
+		// 	}
+		p.ShotsLeft = 0
 	}
 }
 

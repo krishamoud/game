@@ -4,26 +4,52 @@ package games
 import (
 	"container/list"
 	"encoding/json"
+	"log"
 	"math"
 	"math/rand"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/Tarliton/collision2d"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 	"github.com/krishamoud/game/app/common/db"
+	"github.com/krishamoud/game/app/common/networking"
 	"github.com/krishamoud/game/app/common/quadtree"
 	"github.com/krishamoud/game/app/common/utils"
 )
 
+type Hub struct {
+	EventsCollector *networking.EventsCollector
+	Game            *Game
+}
+
 // Game holds the state for the entire game
 type Game struct {
+	Players       map[int]*Player
 	Users         *list.List
 	Food          *list.List
 	Ballistics    *list.List
+	Hub           *Hub
 	ClientManager *ClientManager
 	Sockets       map[string]*Client
 	Quadtree      *quadtree.Quadtree
 	mu            *sync.Mutex
+}
+
+func (g *Game) SetupEventsCollector() {
+	if g.Hub != nil {
+		return
+	}
+	eventsCollector, err := networking.MkEventsCollector()
+	if err != nil {
+		panic(err)
+	}
+	g.Hub = &Hub{
+		EventsCollector: eventsCollector,
+		Game:            g,
+	}
 }
 
 // PushFood adds food to a one of the food arrays
@@ -92,6 +118,73 @@ func (g *Game) SendUpdates() {
 		}
 		data, _ := json.MarshalIndent(&m, "", "\t")
 		p.Emit("serverTellPlayerMove", data)
+	}
+}
+
+func (h *Hub) Start() {
+	for {
+		connections, err := h.EventsCollector.Wait()
+		if err != nil {
+			log.Printf("Failed to epoll wait %v", err)
+			continue
+		}
+		for _, conn := range connections {
+			if conn == nil {
+				break
+			}
+			if msg, _, err := wsutil.ReadClientData(conn); err != nil {
+				if err := h.EventsCollector.Remove(conn); err != nil {
+					log.Printf("Failed to remove %v", err)
+				}
+				conn.Close()
+			} else {
+				m := &Message{}
+				json.Unmarshal(msg, &m)
+				id := h.EventsCollector.GetFdFromConnection(conn)
+				p := h.Game.Players[id]
+				h.Game.dispatch(m, p)
+			}
+		}
+	}
+}
+
+func (h *Hub) AddPlayer(conn net.Conn) *Player {
+	radius := utils.MassToRadius(c.DefaultPlayerMass)
+	position := utils.RandomPosition(radius)
+	cells := []*Cell{}
+	var shape string
+	var massTotal float64
+	if h.Game.Users.Len()&1 == 1 {
+		shape = circle
+	} else {
+		shape = square
+	}
+	cell := &Cell{
+		Mass: c.DefaultPlayerMass,
+		Point: &utils.Point{
+			X: position.X,
+			Y: position.Y,
+		},
+		Radius: radius,
+	}
+	cells = append(cells, cell)
+	massTotal = c.DefaultPlayerMass
+	return &Player{
+		ID:            db.RandomID(12),
+		Point:         position,
+		W:             c.DefaultPlayerMass,
+		H:             c.DefaultPlayerMass,
+		Cells:         cells,
+		MassTotal:     massTotal,
+		Hue:           rand.Intn(360),
+		Type:          "player",
+		LastHeartbeat: time.Now(),
+		Target:        &utils.Point{X: 0, Y: 0},
+		Conn:          nil,
+		ws:            conn,
+		mu:            new(sync.Mutex),
+		Shape:         shape,
+		msgChan:       make(chan string),
 	}
 }
 
@@ -224,14 +317,12 @@ func (g *Game) GetBallistic(id string) *Ballistic {
 func (g *Game) Emit(msg string, body json.RawMessage) {
 	for e := g.Users.Front(); e != nil; e = e.Next() {
 		p := e.Value.(*Player)
-		p.mu.Lock()
-		cn := p.Conn.Conn
 		message := &Message{
 			Type: msg,
 			Data: body,
 		}
-		cn.WriteJSON(message)
-		p.mu.Unlock()
+		json, _ := json.Marshal(message)
+		err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 	}
 }
 
@@ -240,14 +331,12 @@ func (g *Game) Broadcast(pID string, msg string, body json.RawMessage) {
 	for e := g.Users.Front(); e != nil; e = e.Next() {
 		p := e.Value.(*Player)
 		if pID != p.ID {
-			p.mu.Lock()
-			cn := p.Conn.Conn
 			message := &Message{
 				Type: msg,
 				Data: body,
 			}
-			cn.WriteJSON(message)
-			p.mu.Unlock()
+			json, _ := json.Marshal(message)
+			err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 		}
 	}
 }

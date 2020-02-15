@@ -2,8 +2,11 @@
 package games
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 
+	"github.com/gobwas/ws"
 	"github.com/gorilla/websocket"
 	"github.com/krishamoud/game/app/common/controller"
 )
@@ -24,20 +27,18 @@ var upgrader = websocket.Upgrader{
 
 // Connect starts the user connection to the game
 func (c *Controller) Connect(w http.ResponseWriter, r *http.Request) {
-	// upgrade the connection for websockets
-	conn, err := upgrader.Upgrade(w, r, nil)
+	// Upgrade connection
+	conn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
-		http.Error(w, "Could not open websocket connection", http.StatusBadRequest)
 		return
 	}
+	if err, id := MainGame.Hub.EventsCollector.Add(conn); err != nil {
+		log.Printf("Failed to add connection %v", err)
+		conn.Close()
+	} else {
+		fmt.Println(id)
+		p := MainGame.Hub.AddPlayer(conn)
+		MainGame.Players[id] = p
 
-	cn := &Client{
-		Conn: conn,
-		send: make(chan *Message),
-		Type: r.FormValue("type"),
 	}
-	// MainGame.ClientManager.addClient <- cn
-	// go cn.WriteJSON()
-	// go cn.read()
-	setupConnection(cn)
 }

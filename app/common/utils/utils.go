@@ -35,12 +35,12 @@ func ValidNickname(nickname string) bool {
 
 // MassToWidth returns a width based on a mass
 func MassToWidth(mass float64) float64 {
-	return 4 + mass*6
+	return 4 + mass*3
 }
 
 // MassToRadius determines the radius based on mass
 func MassToRadius(mass float64) float64 {
-	return 4 + math.Sqrt(float64(mass))*6
+	return 4 + math.Sqrt(float64(mass))*8
 }
 
 // GetDistance returns the distance between two points

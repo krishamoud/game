@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/krishamoud/game/app/common/conf"
-	"github.com/krishamoud/game/app/common/db"
 	"github.com/krishamoud/game/app/common/quadtree"
 	"github.com/krishamoud/game/app/common/utils"
 )
@@ -22,12 +21,17 @@ const (
 	player = "player"
 )
 
+var EventsCollector *Hub
+var err error
+
 // MainGame is the single exported game the server runs until I create a GameManager
 var MainGame = &Game{
+	Players:    make(map[int]*Player),
 	Users:      list.New(),
 	Food:       list.New(),
 	Ballistics: list.New(),
 	mu:         new(sync.Mutex),
+	Hub:        EventsCollector,
 	ClientManager: &ClientManager{
 		clients:      make(map[*Client]bool),
 		broadcast:    make(chan *Message),
@@ -59,56 +63,6 @@ type Message struct {
 var c = conf.AppConf
 var initMassLog = utils.Log(float64(c.DefaultPlayerMass), float64(c.SlowBase))
 
-func setupConnection(cn *Client) {
-	radius := utils.MassToRadius(c.DefaultPlayerMass)
-	position := utils.RandomPosition(radius)
-	cells := []*Cell{}
-	var shape string
-	var massTotal float64
-	if cn.Type == player {
-		if MainGame.Users.Len()&1 == 1 {
-			shape = circle
-		} else {
-			shape = square
-		}
-		cell := &Cell{
-			Mass: c.DefaultPlayerMass,
-			Point: &utils.Point{
-				X: position.X,
-				Y: position.Y,
-			},
-			Radius: radius,
-		}
-		cells = append(cells, cell)
-		massTotal = c.DefaultPlayerMass
-	}
-	currentPlayer := &Player{
-		ID:            db.RandomID(12),
-		Point:         position,
-		W:             c.DefaultPlayerMass,
-		H:             c.DefaultPlayerMass,
-		Cells:         cells,
-		MassTotal:     massTotal,
-		Hue:           rand.Intn(360),
-		Type:          cn.Type,
-		LastHeartbeat: time.Now(),
-		Target:        &utils.Point{X: 0, Y: 0},
-		Conn:          cn,
-		mu:            new(sync.Mutex),
-		Shape:         shape,
-		msgChan:       make(chan string),
-	}
-
-	for {
-		m := &Message{}
-		err := cn.Conn.ReadJSON(m)
-		if err != nil {
-			return
-		}
-		MainGame.dispatch(m, currentPlayer)
-	}
-}
-
 func (g *Game) dispatch(msg *Message, p *Player) {
 	switch msg.Type {
 	case "gotit":
@@ -117,6 +71,7 @@ func (g *Game) dispatch(msg *Message, p *Player) {
 		p.Name = data["name"].(string)
 		p.ScreenHeight = data["screenHeight"].(float64)
 		p.ScreenWidth = data["screenWidth"].(float64)
+		fmt.Println("got it")
 		g.gotIt(p)
 		break
 	case "pingcheck":

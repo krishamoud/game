@@ -2,8 +2,6 @@
 package games
 
 import (
-	"fmt"
-
 	"github.com/gorilla/websocket"
 )
 
@@ -80,8 +78,5 @@ func (c *Client) read() {
 			c.Conn.Close()
 			break
 		}
-		fmt.Println(m)
-		// msg := <-MainGame.ClientManager.broadcast
-		// fmt.Println(msg)
 	}
 }
