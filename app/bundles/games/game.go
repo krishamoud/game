@@ -7,12 +7,11 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"net"
-	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/Tarliton/collision2d"
-	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/krishamoud/game/app/common/db"
 	"github.com/krishamoud/game/app/common/networking"
@@ -27,15 +26,13 @@ type Hub struct {
 
 // Game holds the state for the entire game
 type Game struct {
-	Players       map[int]*Player
-	Users         *list.List
-	Food          *list.List
-	Ballistics    *list.List
-	Hub           *Hub
-	ClientManager *ClientManager
-	Sockets       map[string]*Client
-	Quadtree      *quadtree.Quadtree
-	mu            *sync.Mutex
+	Players    map[int]*Player
+	Clients    map[string]*Client
+	Users      *list.List
+	Food       *list.List
+	Ballistics *list.List
+	Hub        *Hub
+	Quadtree   *quadtree.Quadtree
 }
 
 func (g *Game) SetupEventsCollector() {
@@ -74,7 +71,7 @@ func (g *Game) SpliceFood(id string) {
 
 // AddPlayerConnection adds the players socket to the game
 func (g *Game) AddPlayerConnection(p *Player) {
-	g.Sockets[p.ID] = p.Conn
+	// g.Sockets[p.ID] = p.Conn
 }
 
 // RemovePlayerConnection removes the players socke to the game
@@ -140,15 +137,15 @@ func (h *Hub) Start() {
 			} else {
 				m := &Message{}
 				json.Unmarshal(msg, &m)
-				id := h.EventsCollector.GetFdFromConnection(conn)
-				p := h.Game.Players[id]
-				h.Game.dispatch(m, p)
+				// id := h.EventsCollector.GetFdFromConnection(conn)
+				// p := h.Game.Players[id]
+				// h.Game.dispatch(m, p)
 			}
 		}
 	}
 }
 
-func (h *Hub) AddPlayer(conn net.Conn) *Player {
+func (h *Hub) AddPlayer(conn *websocket.Conn, client *Client) *Player {
 	radius := utils.MassToRadius(c.DefaultPlayerMass)
 	position := utils.RandomPosition(radius)
 	cells := []*Cell{}
@@ -180,11 +177,10 @@ func (h *Hub) AddPlayer(conn net.Conn) *Player {
 		Type:          "player",
 		LastHeartbeat: time.Now(),
 		Target:        &utils.Point{X: 0, Y: 0},
-		Conn:          nil,
-		ws:            conn,
-		mu:            new(sync.Mutex),
+		ws:            nil,
 		Shape:         shape,
 		msgChan:       make(chan string),
+		client:        client,
 	}
 }
 
@@ -322,7 +318,8 @@ func (g *Game) Emit(msg string, body json.RawMessage) {
 			Data: body,
 		}
 		json, _ := json.Marshal(message)
-		err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
+		p.client.SendMessage(&json)
+		// err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 	}
 }
 
@@ -336,7 +333,8 @@ func (g *Game) Broadcast(pID string, msg string, body json.RawMessage) {
 				Data: body,
 			}
 			json, _ := json.Marshal(message)
-			err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
+			p.client.SendMessage(&json)
+			// err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 		}
 	}
 }

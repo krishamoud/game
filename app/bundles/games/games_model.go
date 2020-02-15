@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/krishamoud/game/app/common/conf"
 	"github.com/krishamoud/game/app/common/quadtree"
 	"github.com/krishamoud/game/app/common/utils"
@@ -27,18 +25,11 @@ var err error
 // MainGame is the single exported game the server runs until I create a GameManager
 var MainGame = &Game{
 	Players:    make(map[int]*Player),
+	Clients:    make(map[string]*Client),
 	Users:      list.New(),
 	Food:       list.New(),
 	Ballistics: list.New(),
-	mu:         new(sync.Mutex),
 	Hub:        EventsCollector,
-	ClientManager: &ClientManager{
-		clients:      make(map[*Client]bool),
-		broadcast:    make(chan *Message),
-		addClient:    make(chan *Client),
-		removeClient: make(chan *Client),
-	},
-	Sockets: make(map[string]*Client),
 	Quadtree: &quadtree.Quadtree{
 		Bounds: quadtree.Bounds{
 			X:      0,
@@ -46,8 +37,8 @@ var MainGame = &Game{
 			Width:  c.GameWidth,
 			Height: c.GameHeight,
 		},
-		MaxObjects: 200,
-		MaxLevels:  7,
+		MaxObjects: 10,
+		MaxLevels:  4,
 		Level:      0,
 		Objects:    make([]quadtree.Bounds, 0),
 		Nodes:      make([]quadtree.Quadtree, 0),
@@ -71,7 +62,6 @@ func (g *Game) dispatch(msg *Message, p *Player) {
 		p.Name = data["name"].(string)
 		p.ScreenHeight = data["screenHeight"].(float64)
 		p.ScreenWidth = data["screenWidth"].(float64)
-		fmt.Println("got it")
 		g.gotIt(p)
 		break
 	case "pingcheck":
@@ -88,7 +78,7 @@ func (g *Game) dispatch(msg *Message, p *Player) {
 		p.WindowResize(w, h)
 		break
 	case "respawn":
-		g.SpliceUser(p.ID)
+		// g.SpliceUser(p.ID)
 		p.Emit("welcome", rawEmptyObj)
 		fmt.Println("[INFO] User " + p.Name + " respawned!")
 		break
@@ -119,8 +109,8 @@ func (g *Game) dispatch(msg *Message, p *Player) {
 
 func (g *Game) gotIt(p *Player) {
 	if !utils.ValidNickname(p.Name) {
-		p.Conn.Conn.WriteMessage(websocket.TextMessage, []byte("kick"))
-		g.RemovePlayerConnection(p)
+		// p.Conn.Conn.WriteMessage(websocket.TextMessage, []byte("kick"))
+		// g.RemovePlayerConnection(p)
 	} else {
 		fmt.Println("[INFO] Player " + p.Name + " connected!")
 		g.AddPlayerConnection(p)
@@ -166,7 +156,7 @@ func (g *Game) gotIt(p *Player) {
 		}
 		data, _ := json.MarshalIndent(&gd, "", "\t")
 		p.Emit("gameSetup", data)
-		fmt.Println("Total Players:", g.Users.Len())
+		fmt.Println("Total Players:", len(g.Players))
 	}
 }
 

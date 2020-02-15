@@ -2,11 +2,9 @@
 package games
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 
-	"github.com/gobwas/ws"
 	"github.com/gorilla/websocket"
 	"github.com/krishamoud/game/app/common/controller"
 )
@@ -28,17 +26,22 @@ var upgrader = websocket.Upgrader{
 // Connect starts the user connection to the game
 func (c *Controller) Connect(w http.ResponseWriter, r *http.Request) {
 	// Upgrade connection
-	conn, _, _, err := ws.UpgradeHTTP(r, w)
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	if err, id := MainGame.Hub.EventsCollector.Add(conn); err != nil {
-		log.Printf("Failed to add connection %v", err)
-		conn.Close()
-	} else {
-		fmt.Println(id)
-		p := MainGame.Hub.AddPlayer(conn)
-		MainGame.Players[id] = p
+	// if err, id := MainGame.Hub.EventsCollector.Add(conn); err != nil {
+	// 	log.Printf("Failed to add connection %v", err)
+	// 	conn.Close()
+	// } else {
+	client := NewClient(conn, MainGame)
+	p := MainGame.Hub.AddPlayer(conn, client)
+	client.player = p
+	MainGame.Clients[client.id] = client
 
-	}
+	log.Println("Added new client. Now", len(MainGame.Clients), "clients connected.")
+	client.Listen()
+	// p := MainGame.Hub.AddPlayer(conn)
+	// MainGame.Players[id] = p
+	// }
 }

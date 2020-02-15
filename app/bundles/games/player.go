@@ -7,12 +7,9 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/Tarliton/collision2d"
-	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
 	"github.com/krishamoud/game/app/common/db"
 	"github.com/krishamoud/game/app/common/quadtree"
 	"github.com/krishamoud/game/app/common/utils"
@@ -38,7 +35,6 @@ type Player struct {
 	LastHeartbeat time.Time          `json:"lastHeartBeat"`
 	Target        *utils.Point       `json:"target"`
 	LastSplit     time.Time          `json:"lastSplit"`
-	Conn          *Client            `json:"conn"`
 	ScreenWidth   float64            `json:"screenWidth"`
 	ScreenHeight  float64            `json:"screenHeight"`
 	Shape         string             `json:"shape"`
@@ -52,15 +48,15 @@ type Player struct {
 	ws            net.Conn
 	msgChan       chan string
 	lastShot      time.Time
-	mu            *sync.Mutex
 	sprinting     bool
 	sprintStart   time.Time
 	invinc        bool
 	invincStart   time.Time
+	client        *Client
 }
 
 // NewPlayer returns a new instance of a player
-func NewPlayer(t string, cn *Client) *Player {
+func NewPlayer(t string) *Player {
 	radius := utils.MassToRadius(c.DefaultPlayerMass)
 	position := utils.RandomPosition(radius)
 	cells := []*Cell{}
@@ -91,11 +87,9 @@ func NewPlayer(t string, cn *Client) *Player {
 		Cells:         cells,
 		MassTotal:     massTotal,
 		Hue:           rand.Intn(360),
-		Type:          cn.Type,
+		Type:          "player",
 		LastHeartbeat: time.Now(),
 		Target:        &utils.Point{X: 0, Y: 0},
-		Conn:          cn,
-		mu:            new(sync.Mutex),
 		Shape:         shape,
 		msgChan:       make(chan string),
 	}
@@ -275,7 +269,8 @@ func (p *Player) Emit(msg string, body json.RawMessage) {
 		Data: body,
 	}
 	json, _ := json.Marshal(message)
-	err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
+	p.client.SendMessage(&json)
+	// err = wsutil.WriteServerMessage(p.ws, ws.OpText, json)
 }
 
 // SetCollider sets the collider every frame to fit the expanding size
@@ -370,6 +365,7 @@ func (p *Player) CheckCollisions(collidablePoints []quadtree.Bounds, g *Game) {
 					continue
 				}
 			}
+
 			if p.FoodCollision(f) {
 				p.AddMass(f.Mass)
 				g.SpliceFood(col.ID)
